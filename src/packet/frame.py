@@ -8,6 +8,9 @@ class FrameType(Enum):
     PATH_CHALLENGE = 0x1a
     PATH_RESPONSE = 0x1b
     NEW_CONNECTION_ID = 0x18
+    FILE_REQUEST = 0x1c
+    FILE_RESPONSE = 0x1d
+    FILE_DATA = 0x1e
 
 @dataclass
 class Frame:
@@ -61,3 +64,44 @@ class NewConnectionIdFrame(Frame):
         result.append(len(self.connection_id))
         result.extend(self.connection_id)
         return bytes(result) 
+
+@dataclass
+class FileRequestFrame(Frame):
+    """文件请求帧"""
+    filename: str
+    
+    def __init__(self, filename: str):
+        super().__init__(FrameType.FILE_REQUEST)
+        self.filename = filename
+    
+    def to_bytes(self) -> bytes:
+        filename_bytes = self.filename.encode('utf-8')
+        return bytes([self.type.value]) + len(filename_bytes).to_bytes(2, 'big') + filename_bytes
+
+@dataclass
+class FileResponseFrame(Frame):
+    """文件响应帧"""
+    file_size: int
+    chunk_size: int = 8192  # 默认块大小
+    
+    def __init__(self, file_size: int, chunk_size: int = 8192):
+        super().__init__(FrameType.FILE_RESPONSE)
+        self.file_size = file_size
+        self.chunk_size = chunk_size
+    
+    def to_bytes(self) -> bytes:
+        return bytes([self.type.value]) + self.file_size.to_bytes(8, 'big') + self.chunk_size.to_bytes(4, 'big')
+
+@dataclass
+class FileDataFrame(Frame):
+    """文件数据帧"""
+    chunk_id: int
+    data: bytes
+    
+    def __init__(self, chunk_id: int, data: bytes):
+        super().__init__(FrameType.FILE_DATA)
+        self.chunk_id = chunk_id
+        self.data = data
+    
+    def to_bytes(self) -> bytes:
+        return bytes([self.type.value]) + self.chunk_id.to_bytes(4, 'big') + len(self.data).to_bytes(4, 'big') + self.data 

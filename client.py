@@ -2,10 +2,14 @@ import asyncio
 import logging
 import socket
 import psutil  # 替换 netifaces
+import time
+import os
 from typing import Dict, Optional
 from src.transport.udp import QuicTransport
 from src.connection.connection import QuicConnection, Path
-from src.packet.header import Header
+from src.packet.header import Header, PacketType
+from src.packet.frame import FileRequestFrame, FileResponseFrame, FileDataFrame
+from src.packet.packet_processor import PacketProcessor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +32,10 @@ class QuicClient:
         self.active_interface: Optional[NetworkInterface] = None
         self.connection: Optional[QuicConnection] = None
         self._handshake_complete = asyncio.Event()
+        self.receiving_files: Dict[str, Dict] = {}
+        self.transfer_complete = asyncio.Event()  # 添加传输完成事件
+        self.transfer_stats = {}
+        logger.info("QuicClient initialized")
     
     def discover_interfaces(self):
         """发现可用的网络接口"""
@@ -51,10 +59,9 @@ class QuicClient:
     async def setup_interface(self, interface: NetworkInterface):
         """为网络接口设置 QUIC 传输"""
         transport = QuicTransport()
+        transport.client = self  # 设置客户端引用
         try:
-            # 使用接口的 IP 地址绑定
             await transport.create_endpoint(interface.ip, 0)
-            # 设置握手回调
             transport.on_handshake_complete = self.handle_handshake_response
             interface.transport = transport
             interface.is_active = True
@@ -65,7 +72,9 @@ class QuicClient:
             return False
     
     async def start(self):
-        """启动 QUIC 客户端"""
+        """启动 QUIC 客户端并建立连接"""
+        logger.info("Starting QUIC client...")
+        
         # 发现网络接口
         self.discover_interfaces()
         if not self.interfaces:
@@ -74,35 +83,41 @@ class QuicClient:
         # 设置所有接口
         for interface in self.interfaces.values():
             await self.setup_interface(interface)
-        
+            
         # 选择第一个接口作为初始接口
         self.active_interface = next(iter(self.interfaces.values()))
+        logger.info(f"Selected active interface: {self.active_interface.name}")
         
         # 创建连接
-        conn_id = Header.generate_connection_id()
+        conn_id = os.urandom(8)
         self.connection = QuicConnection(conn_id, is_client=True)
         self.connection.transport = self.active_interface.transport
         self.active_interface.transport.connections[conn_id] = self.connection
         
-        # 设置初始路径
-        initial_path = Path(
-            (self.active_interface.ip, self.active_interface.transport.transport.get_extra_info('socket').getsockname()[1]),
-            self.server_addr
+        # 发送 Initial 包
+        initial_packet = PacketProcessor.create_packet(
+            Header(
+                PacketType.INITIAL,
+                destination_connection_id=os.urandom(8),
+                source_connection_id=conn_id
+            ),
+            []
         )
-        self.connection.active_path = initial_path
         
-        # 开始握手
-        logger.info(f"Starting handshake using interface {self.active_interface.name} to server {self.server_addr}")
-        await self.connection.start_handshake()
+        logger.info(f"Starting handshake with source CID: {conn_id.hex()}")
+        self.active_interface.transport.send_datagram(initial_packet, self.server_addr)
         
         # 等待连接建立
-        timeout = 10  # 10秒超时
         try:
-            await asyncio.wait_for(self._handshake_complete.wait(), timeout)
+            await asyncio.wait_for(self._handshake_complete.wait(), timeout=10.0)
             logger.info("Connection established successfully")
+            return True
         except asyncio.TimeoutError:
-            logger.error("Handshake timeout. Server might be unreachable.")
-            raise TimeoutError("Handshake timeout")
+            logger.error("Handshake timeout")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during start: {e}")
+            raise
     
     async def migrate_to_interface(self, interface_name: str):
         """迁移到新的网络接口"""
@@ -125,35 +140,144 @@ class QuicClient:
         # 开始路径验证
         await self.connection.validate_path(new_path)
         logger.info(f"Started path validation for interface {interface_name}")
-
+    
+    async def connect(self):
+        """连接到服务器"""
+        logger.info("Starting connection process...")
+        # ... 连接建立过程 ...
+        try:
+            await asyncio.wait_for(self._handshake_complete.wait(), timeout=5.0)
+            logger.info("Connection established successfully")
+        except asyncio.TimeoutError:
+            logger.error("Connection timeout")
+            raise
+        
+    async def request_file(self, filename: str):
+        """请求文件"""
+        if not self.connection or not self.connection.is_established:
+            logger.error("Cannot request file: connection not established")
+            return
+            
+        logger.info(f"Requesting file: {filename}")
+        
+        # 初始化文件接收状态
+        self.receiving_files[filename] = {
+            'size': None,
+            'chunk_size': None,
+            'total_chunks': None,
+            'start_time': time.time(),
+            'received_chunks': {},
+            'complete': False
+        }
+        self.transfer_complete.clear()
+        
+        # 发送文件请求
+        request_frame = FileRequestFrame(filename)
+        packet = PacketProcessor.create_packet(
+            Header(PacketType.SHORT, self.connection.peer_connection_id, self.connection.connection_id),
+            [request_frame]
+        )
+        self.connection.transport.send_datagram(packet, self.server_addr)
+        
+        # 等待传输完成
+        try:
+            await asyncio.wait_for(self.transfer_complete.wait(), timeout=300)
+            return True
+        except asyncio.TimeoutError:
+            logger.error(f"File transfer timeout: {filename}")
+            return False
+            
+    def handle_file_response(self, frame: FileResponseFrame, filename: str):
+        """处理文件响应"""
+        logger.info(f"收到文件响应: 大小={frame.file_size}, 分片大小={frame.chunk_size}")
+        
+        if filename not in self.receiving_files:
+            logger.error(f"未找到文件信息: {filename}")
+            return
+            
+        file_info = self.receiving_files[filename]
+        file_info['size'] = frame.file_size
+        file_info['chunk_size'] = frame.chunk_size
+        file_info['start_time'] = time.time()  # 重置开始时间
+        
+        logger.info(f"文件传输开始: {filename}")
+        
+    def handle_file_data(self, frame: FileDataFrame, filename: str):
+        """处理文件数据"""
+        if filename not in self.receiving_files:
+            logger.error(f"No file info found for: {filename}")
+            return
+            
+        file_info = self.receiving_files[filename]
+        file_info['received_chunks'][frame.chunk_id] = frame.data
+        
+        if file_info.get('size') is not None:
+            current_size = sum(len(chunk) for chunk in file_info['received_chunks'].values())
+            if current_size >= file_info['size']:
+                # 打印传输性能报告
+                elapsed_time = time.time() - file_info['start_time']
+                throughput = current_size / (1024 * 1024 * elapsed_time)  # MB/s
+                
+                logger.info("\n=== 文件传输完成报告 ===")
+                logger.info(f"文件名称: {filename}")
+                logger.info(f"文件大小: {current_size / (1024*1024):.2f} MB")
+                logger.info(f"传输时间: {elapsed_time:.2f} 秒")
+                logger.info(f"平均带宽: {throughput:.2f} MB/s")
+                logger.info(f"总分片数: {len(file_info['received_chunks'])}")
+                logger.info("========================")
+                
+                file_info['complete'] = True
+                self.transfer_complete.set()
+                
+    
 async def main():
-    # 使用实际的服务器 IP
-    server_ip = "172.29.26.221"  # 根据实际情况修改
+    """主函数"""
+    server_ip = "172.30.1.78"
     server_port = 5000
     
     client = QuicClient(server_ip, server_port)
     
     try:
+        # 1. 启动并建立连接
+        logger.info("Phase 1: Starting client and establishing connection...")
         await client.start()
+        logger.info("Connection established")
         
+        # 2. 请求视频
         while True:
-            print("\nAvailable interfaces:")
-            for name in client.interfaces:
-                print(f"- {name}")
+            choice = input("\nChoose action:\n1. Request video\n2. Migrate connection\n3. Quit\nYour choice: ")
             
-            iface = input("\nEnter interface name to migrate to (or 'q' to quit): ")
-            if iface.lower() == 'q':
+            if choice == '1':
+                logger.info("\nPhase 2: Requesting video file...")
+                success = await client.request_file("movie.mp4")
+                if not success:
+                    logger.error("Video transfer failed")
+                    
+            elif choice == '2':
+                # 3. 连接迁移
+                logger.info("\nPhase 3: Connection migration...")
+                print("\nAvailable interfaces:")
+                for name in client.interfaces:
+                    print(f"- {name}")
+                
+                iface = input("\nEnter interface name to migrate to: ")
+                try:
+                    await client.migrate_to_interface(iface)
+                    logger.info(f"Successfully migrated to interface: {iface}")
+                except Exception as e:
+                    logger.error(f"Migration failed: {e}")
+                    
+            elif choice == '3':
+                logger.info("Exiting...")
                 break
-            
-            try:
-                await client.migrate_to_interface(iface)
-            except Exception as e:
-                logger.error(f"Migration failed: {e}")
+            else:
+                print("Invalid choice, please try again")
     
     except KeyboardInterrupt:
         logger.info("Client stopped by user")
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Client error: {e}")
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main()) 

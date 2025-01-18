@@ -4,7 +4,7 @@ from typing import Optional, Callable, Dict
 from ..packet.header import Header, PacketType
 from ..packet.packet_processor import PacketProcessor
 from ..connection.connection import QuicConnection, Path
-from ..packet.frame import PathChallengeFrame, PathResponseFrame
+from ..packet.frame import PathChallengeFrame, PathResponseFrame, FileRequestFrame, FileResponseFrame, FileDataFrame
 from ..crypto.tls import TlsContext
 
 logger = logging.getLogger("quic.transport")
@@ -17,6 +17,8 @@ class QuicTransport:
         self.connections: Dict[bytes, QuicConnection] = {}  # connection_id -> connection
         self._local_addr: Optional[tuple[str, int]] = None
         self.on_handshake_complete = None  # 添加回调
+        self.client = None  # 添加客户端引用
+        self.server = None  # 添加服务器引用
     
     async def create_endpoint(self, host: str, port: int):
         """创建 UDP 端点"""
@@ -40,9 +42,7 @@ class QuicTransport:
         try:
             # 解析包头
             header, consumed = Header.parse(data)
-            logger.info(f"Received packet type {header.packet_type} from {addr}")
-            logger.info(f"Packet CIDs - Source: {header.source_connection_id.hex()}, "
-                       f"Destination: {header.destination_connection_id.hex()}")
+            
             
             # 查找或创建连接
             connection = self.connections.get(header.destination_connection_id)
@@ -100,7 +100,6 @@ class QuicTransport:
                        addr: tuple[str, int]):
         """处理数据包负载"""
         try:
-            logger.info(f"Processing packet from {addr}, payload length: {len(payload)}")
             
             # 如果是空负载，可能是握手包
             if len(payload) < 2:
@@ -136,8 +135,25 @@ class QuicTransport:
                             connection.active_path = path
                             logger.info(f"Path migration complete: {addr}")
                 
+                elif isinstance(frame, FileRequestFrame):
+                    # 处理文件请求
+                    logger.info(f"Received FILE_REQUEST for {frame.filename}")
+                    if hasattr(self.server, 'handle_file_request'):
+                        asyncio.create_task(self.server.handle_file_request(connection, frame, addr))
+                        
+                elif isinstance(frame, FileResponseFrame):
+                    # 处理文件响应
+                    logger.info(f"Received FILE_RESPONSE")
+                    if hasattr(self.client, 'handle_file_response'):
+                        self.client.handle_file_response(frame, "movie.mp4")  # 传入文件名
+                        
+                elif isinstance(frame, FileDataFrame):
+                    # 处理文件数据
+                    if hasattr(self.client, 'handle_file_data'):
+                        self.client.handle_file_data(frame, "movie.mp4")  # 传入文件名
+                        
         except Exception as e:
-            logger.error(f"Error processing frames: {e}")
+            logger.error(f"Error processing packet: {e}")
     
     def send_datagram(self, data: bytes, addr: tuple[str, int]):
         """发送数据包"""
