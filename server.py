@@ -1,11 +1,15 @@
 import asyncio
 import logging
 from pathlib import Path
+import argparse
 from src.transport.udp import QuicTransport
 from src.connection.connection import QuicConnection
 from src.packet.header import Header, PacketType
 from src.packet.packet_processor import PacketProcessor
 from src.packet.frame import FileRequestFrame, FileResponseFrame, FileDataFrame
+import socket
+import requests
+import urllib.request
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,10 +106,52 @@ class QuicServer:
         logger.info(f"文件发送完成: {frame.filename}")
         logger.info(f"总共发送了 {total_chunks} 个数据块")
     
+    async def get_public_ip(self):
+        """获取服务器的公网IP地址"""
+        try:
+            # 尝试使用不同的服务获取公网IP
+            try:
+                response = requests.get('https://api.ipify.org', timeout=5)
+                if response.status_code == 200:
+                    return response.text
+            except:
+                pass
+            
+            try:
+                response = urllib.request.urlopen('https://ident.me').read().decode('utf8')
+                return response
+            except:
+                pass
+            
+            try:
+                response = urllib.request.urlopen('https://ifconfig.me').read().decode('utf8')
+                return response
+            except:
+                pass
+            
+            return "无法获取公网IP"
+        except Exception as e:
+            logger.error(f"获取公网IP出错: {e}")
+            return "获取公网IP失败"
+
     async def start(self):
         """启动 QUIC 服务器"""
         logger.info(f"Starting QUIC server on {self.host}:{self.port}")
         await self.transport.create_endpoint(self.host, self.port)
+        
+        # 打印服务器绑定信息
+        local_addr = self.transport.transport.get_extra_info('sockname')
+        logger.info(f"QUIC server is running on {local_addr[0]}:{local_addr[1]}")
+        
+        # 获取公网IP
+        public_ip = await self.get_public_ip()
+        
+        print(f"=== QUIC 服务器已启动 ===")
+        print(f"本地监听地址: {local_addr[0]}")
+        print(f"本地监听端口: {local_addr[1]}")
+        print(f"公网IP地址: {public_ip}")
+        print(f"资源目录: {self.resource_path}")
+        print(f"=========================")
         
         # 扩展 QuicTransport 的处理逻辑
         self.transport.handle_initial_packet = self.handle_initial_packet
@@ -121,16 +167,23 @@ class QuicServer:
                 self.transport.transport.close()
 
 async def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='QUIC File Server')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='Bind address')
+    parser.add_argument('--port', type=int, default=5000, help='Bind port')
+    parser.add_argument('--dir', type=str, default='./resource', help='Resource directory')
+    args = parser.parse_args()
+    
     # 创建服务器实例，指定监听地址、端口和资源目录
-    server = QuicServer("0.0.0.0", 5000, "./resource")
+    server = QuicServer(args.host, args.port, args.dir)
     try:
         await server.start()
-        logger.info("Server started on 0.0.0.0:5000")
         # 保持服务器运行
         while True:
             await asyncio.sleep(3600)
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
+        print("服务器已停止")
     except Exception as e:
         logger.error(f"Server error: {e}")
 

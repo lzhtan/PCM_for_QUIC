@@ -232,7 +232,7 @@ class QuicClient:
     
 async def main():
     """主函数"""
-    server_ip = "172.30.1.78"
+    server_ip = "172.29.12.111"
     server_port = 5000
     
     client = QuicClient(server_ip, server_port)
