@@ -19,8 +19,8 @@
 
 1. 克隆仓库：
 bash
-git clone https://github.com/yourusername/python-quic-server.git
-cd python-quic-server
+git clone https://github.com/lzhtan/PCM_for_QUIC.git
+cd PCM_for_QUIC
 
 2. 安装依赖：
 bash
