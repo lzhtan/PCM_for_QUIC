@@ -44,3 +44,7 @@ python3 client.py
 1. 服务器启动后，会监听指定地址和端口，等待客户端连接。
 2. 客户端连接到服务器后，可以发送文件请求，服务器会返回文件数据。
 3. 客户端可手动选择连接迁移。
+
+必要时候，可能需要Python虚拟环境执行：
+python3 -m venv path
+source path/bin/activate
