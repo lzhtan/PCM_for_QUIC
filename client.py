@@ -137,9 +137,19 @@ class QuicClient:
             self.server_addr
         )
         
+        # 保存旧的连接 ID 用于比较
+        old_connection_id = self.connection.connection_id.hex()
+        
         # 开始路径验证
         await self.connection.validate_path(new_path)
         logger.info(f"Started path validation for interface {interface_name}")
+        
+        # 打印连接迁移前后的连接 ID
+        new_connection_id = self.connection.connection_id.hex()
+        logger.info(f"连接迁移信息:")
+        logger.info(f"  - 旧连接 ID: {old_connection_id}")
+        logger.info(f"  - 新连接 ID: {new_connection_id}")
+        logger.info(f"  - 对端连接 ID: {self.connection.peer_connection_id.hex()}")
     
     async def connect(self):
         """连接到服务器"""
@@ -232,7 +242,7 @@ class QuicClient:
     
 async def main():
     """主函数"""
-    server_ip = "172.29.12.111"
+    server_ip = "169.254.141.86"
     server_port = 5000
     
     client = QuicClient(server_ip, server_port)
