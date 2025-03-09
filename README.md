@@ -41,6 +41,7 @@ python3 server.py
 2. 启动客户端：
 bash
 python3 client.py
+
 **注意**: 修改代码中的server_ip和server_port以匹配服务器的IP和端口。
 
 
