@@ -155,10 +155,12 @@ class QuicTransport:
         except Exception as e:
             logger.error(f"Error processing packet: {e}")
     
-    def send_datagram(self, data: bytes, addr: tuple[str, int]):
-        """发送数据包"""
+    def send_datagram(self, data: bytes, addr: tuple):
+        """发送数据报"""
         if self.transport:
             self.transport.sendto(data, addr)
+            return True
+        return False
 
 class QuicDatagramProtocol(asyncio.DatagramProtocol):
     """QUIC UDP 协议处理"""

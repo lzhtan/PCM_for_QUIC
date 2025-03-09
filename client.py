@@ -239,7 +239,21 @@ class QuicClient:
                 file_info['complete'] = True
                 self.transfer_complete.set()
                 
-    
+    def print_congestion_stats(self):
+        """打印拥塞控制统计信息"""
+        if not self.connection:
+            logger.info("没有活动连接")
+            return
+        
+        stats = self.connection.get_congestion_stats()
+        logger.info("\n=== 拥塞控制状态 ===")
+        logger.info(f"拥塞窗口: {stats['cwnd']} 包")
+        logger.info(f"慢启动阈值: {stats['ssthresh']} 包")
+        logger.info(f"状态: {stats['state']}")
+        logger.info(f"RTT: {stats['smoothed_rtt_ms']:.2f} ms (最小: {stats['min_rtt_ms']:.2f} ms, 最新: {stats['latest_rtt_ms']:.2f} ms)")
+        logger.info(f"飞行中的包: {stats['in_flight']} / {stats['cwnd']}")
+        logger.info("=====================")
+
 async def main():
     """主函数"""
     server_ip = "169.254.141.86"
@@ -255,7 +269,7 @@ async def main():
         
         # 2. 请求视频
         while True:
-            choice = input("\nChoose action:\n1. Request video\n2. Migrate connection\n3. Quit\nYour choice: ")
+            choice = input("\nChoose action:\n1. Request video\n2. Migrate connection\n3. Show congestion stats\n4. Quit\nYour choice: ")
             
             if choice == '1':
                 logger.info("\nPhase 2: Requesting video file...")
@@ -276,8 +290,12 @@ async def main():
                     logger.info(f"Successfully migrated to interface: {iface}")
                 except Exception as e:
                     logger.error(f"Migration failed: {e}")
-                    
+            
             elif choice == '3':
+                # 显示拥塞控制统计信息
+                client.print_congestion_stats()
+                    
+            elif choice == '4':
                 logger.info("Exiting...")
                 break
             else:
