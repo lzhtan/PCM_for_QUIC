@@ -63,4 +63,4 @@ python3 client.py
 - 确保防火墙允许UDP流量通过
 - 检查网络接口配置是否正确
 
-更多信息和详细说明，请参考我们的论文和演示视频。
+更多信息和详细说明，请参考我们的论文和[演示视频](https://www.bilibili.com/video/BV1eaRhY9E4R/)。
